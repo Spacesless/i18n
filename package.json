@@ -1,0 +1,13 @@
+{
+	"dependencies": {
+		"@vitalets/google-translate-api": "^8.0.0",
+		"axios": "^0.27.2",
+		"cheerio": "1.0.0-rc.12",
+		"exceljs": "^4.3.0",
+		"fs-extra": "^10.1.0",
+		"iconv-lite": "^0.6.3"
+	},
+	"devDependencies": {
+		"vue-i18n-extract": "^2.0.7"
+	}
+}
