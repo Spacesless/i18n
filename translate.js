@@ -1,57 +1,65 @@
 const fs = require('fs-extra');
 const path = require('path');
 const axios = require('axios');
-const ExcelJS = require('exceljs');
 const translate = require('@vitalets/google-translate-api');
 const cheerio = require('cheerio')
 
-const mode = 'b'
-const handleTranslate = mode === 'a' ? fetchApi : cheerioPage
-
 /**
- * planA 调用谷歌翻译Api
- * @sumary 限频次，可能会被封IP
+ * planA 调用谷歌翻译Api (限频次，可能会被封IP)
  * planB 抓取谷歌翻译网页
+ * @sumary 建议自己换成百度翻译Api
  */
+const mode = 'fetchApi'
+const handleTranslate = mode === 'fetchApi' ? fetchApi : cheerioPage
+
+const expectList = [
+  { lang: 'en', filename: 'en-US' }
+] // 期望生成的语言文件
+
 async function setup() {
-  const { columns, data } = await readExcelToJson(path.join(__dirname, `dist/web/i18n.xlsx`))
+  const sourceLang = fs.readJSONSync(path.join(__dirname, 'dist/language-files/zh-CN.json'))
   
   let taskList = []
-  for(let i = 0; i < data.length; i++) {
-    const item = data[i]
-    if(!item['英文']) {
-      taskList.push(
-        handleTranslate({
-          source: item['中文'], 
-          index: i
-        })
-      )
-    }
-    if(!item['西班牙语']) {
-      taskList.push(
-        handleTranslate({
-          source: item['中文'], 
-          index: i,
-          to: 'es'
-        })
-      )
+
+  const lastGroup = Object.keys(sourceLang).pop()
+  const lastKey = Object.keys(sourceLang[lastGroup]).pop()
+
+  for(const item of expectList) {
+    item.result = {}
+
+    for(const i in sourceLang) {
+      for(const j in sourceLang[i]) {
+        taskList.push(
+          handleTranslate({
+            source: sourceLang[i][j], 
+            group: i,
+            key: j,
+            to: item.lang
+          })
+        )
+
+        if (taskList.length === 10 || (i === lastGroup && j === lastKey)) {
+          await Promise.allSettled(taskList).then(res => {
+            res.forEach(d => {
+              if (d.status === 'fulfilled') {
+                const { group, key, to, text } = d.value
+
+                if (to === item.lang) {
+                  if (!item.result[group]) {
+                    item.result[group] = {}
+                  }
+                  item.result[group][key] = text
+                }
+              }
+            })
+          }).catch(() => {})
+          taskList = []
+        }
+      }
     }
 
-    if(taskList.length === 10 || i === data.length - 1) {
-      await Promise.allSettled(taskList).then(res => {
-        res.forEach(d => {
-          if(d.status === 'fulfilled') {
-            const value = d.value
-            const lang = value.to === 'es' ? '西班牙语' : '英文'
-            data[value.index][lang] = value.text
-          }
-        })
-      }).catch(() => {})
-      taskList = []
-    }
+    fs.writeJSON(path.join(__dirname, `dist/translate-files/${item.filename}.json`), item.result, { spaces: 2 })
   }
-
-  exportJsonToExcel(data)
  }
 
 /**
@@ -61,50 +69,20 @@ async function setup() {
  * @param {String} from 源语言
  * @returns {Promise}
  */
-function fetchApi({ source, index, to = 'en', from = 'zh-CN' }) {
+function fetchApi({ source, group, key, to = 'en', from = 'zh-CN' }) {
   return translate(source, {from, to: 'es', tld: 'cn'}).then(res => {
-    const text = res.text
-    console.log(index, to, source, text)
-    return {
-      index,
-      to,
-      text: text.replace(text[0], text[0].toLocaleUpperCase())
-    }
+    let text = res.text
+    text = text.replace(text[0], text[0].toLocaleUpperCase())
+    console.log(group, key, to, source, text)
+
+    return { group, key, to, text }
   }).catch(err => {
     console.error(err.statusCode);
   });
- }
-
- async function readExcelToJson(filename) {
-  let columns = []
-  const data = []
-
-  const workbook = new ExcelJS.Workbook()
-  await workbook.xlsx.readFile(filename)
-
-  const worksheet = workbook.getWorksheet(1) // 获取第一个worksheet
-  worksheet.eachRow(function(row, rowNumber) {
-    const rowValues = row.values
-    rowValues.shift()
-    if (rowNumber === 1) {
-      columns = rowValues
-    } else {
-      const sheetToJson = {}
-      rowValues.forEach((item, index) => {
-        sheetToJson[columns[index]] = item
-      })
-      if(sheetToJson['页面'] === '') {
-        const last = data[data.length - 1]
-        sheetToJson['页面'] = last ? last['页面'] : ''
-      }
-      data.push(sheetToJson)
-    }
-  })
-
-  return { columns, data }
 }
 
-async function cheerioPage({ source, index, to = 'en', from = 'zh-CN' }) {
+
+async function cheerioPage({ source, group, key, to = 'en', from = 'zh-CN' }) {
   return axios({
     url: `https://translate.google.cn/m?sl=${from}&tl=${to}&q=${encodeURI(source)}`,
     method: 'get'
@@ -112,51 +90,14 @@ async function cheerioPage({ source, index, to = 'en', from = 'zh-CN' }) {
     const html = res.data
     const $ = cheerio.load(html)
 
-    const text = $('.result-container').text()
+    let text = $('.result-container').text()
+    text = text.replace(text[0], text[0].toLocaleUpperCase())
+    console.log(group, key, to, source, text)
 
-    console.log(index, to, source, text)
-    return {
-      index,
-      to,
-      text: text.replace(text[0], text[0].toLocaleUpperCase())
-    }
+    return { group, key, to, text }
   }).catch(err => {
     console.error(err);
   })
-}
-
-function exportJsonToExcel(data) {
-  const workbook = new ExcelJS.Workbook()
-  const worksheet = workbook.addWorksheet('My Sheet')
-
-  const columns = [
-    { header: '页面', key: '页面', width: 60},
-    { header: '中文', key: '中文', width: 50},
-    { header: '英文', key: '英文', width: 50},
-    { header: '西班牙语', key: '西班牙语', width: 50}
-  ]
-  worksheet.columns = columns
-  worksheet.addRows(data)
-
-  const header = worksheet.getRow(1)
-  columns.forEach((item, index) => {
-    // 设置表头属性
-    const headerCell = header.getCell(item.key)
-    // 字体
-    headerCell.font = {
-      color: { argb: 'FFFFFFFF' }
-    }
-    // 对齐
-    headerCell.alignment = { horizontal: 'center' }
-    // 填充
-    headerCell.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FF808080' }
-    }
-  })
-
-  workbook.xlsx.writeFile(`dist/web/translate-base-5.xlsx`);
 }
 
 setup()

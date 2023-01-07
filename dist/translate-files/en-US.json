@@ -1,0 +1,10 @@
+{
+  "主页": {
+    "这是父组件": "This is the parent component",
+    "这是链接": "This is a link",
+    "这是控制台信息": "This is console information"
+  },
+  "组件": {
+    "这是子组件": "This is a sub component"
+  }
+}
